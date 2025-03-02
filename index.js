@@ -7,8 +7,10 @@ import { chromaClient } from 'chromadb';
 dotenv.config();
 
 const openai = new OpenAI();
-const chromaClient = new ChromaClient({ path: ''});
+const chromaClient = new ChromaClient({ path: 'http://localhost:8000'});
 chromaClient.api.getV2Heartbeat()
+
+const WEB_COLLECTION = 'WEB_sCAPED_DATA_COLLECTION'
 
 async function scapeWebpage(url = '') {
     const { } = await axios.get(url);    // to get the data
@@ -17,16 +19,23 @@ async function scapeWebpage(url = '') {
     const pageHead = $('head').html();
     const pageBody = $('body').html();
 
-    const internalLinks = []
+    const internalLinks = new set();
+    const externalLinks = new set();
 
     $('a').each(__, el) => {
         const link = $(el).attr('href');
         if (link === '/') return;
         if (link.startsWith('http') || link.startsWith('https')) {
-            externalLinks.push(link);
+            externalLinks.add(link);
         } else {
-            internalLinks.push(link);
+            internalLinks.add(link);
         }
+    }
+    return{
+        head: pageHead,
+        body: pageBody,
+        internalLinks: Array.from(internalLinks),
+        externalLinks: Array.from(externalLinks)
     }
 };
 
@@ -41,17 +50,39 @@ async function generateVectorEmbeddings({ url, text }) {
     return embedding.data[0].embedding;
 }
 
+async function insetIntoDB({embedding, url, body='', head}) {
+    const collection = await chromaClient.getOrCreateCollection({
+        name: WEB_COLLECTION,
+    })
+    collection.add({
+        ids: [url],
+        embeddings: [embedding],
+        metadatas: [{url, body, head}]
+    })
+}
+
 //next we ingest 
 async function ingest(url = '') {
-    const { head, body, internalLinks } = await scapeWebpage
+    console.log('Ingesting ${url}');
+    const { head, body, internalLinks } = await scapeWebpage(url);
+    const bodyChunks = chunkText(body, 2000);
+    
+    const headEmbedding = await generateVectorEmbeddings({ text: head});
+    await insertIntoDB({ embedding:headEmbedding, url}); 
 
-    const headEmbedding = await generateVectorEmbeddings({ text: head })
-    const bodyChunks = chunkText(body, 2000)
     for (const chunk of bodyChunks) {
         const bodyEmbedding = await generateVectorEmbeddings({ text: chunk })
     }
+
+    for (const link  of internalLinks){
+        const url = '${url}${link}';
+        console.log(_url);
+        await ingest(_url);
+    }
+    console.log('ingested successfully ${url}');
 }
-scapeWebpage('url');
+
+ingest('https://www.localhost.com/');
 
 function chunkText(text, size) {
     if (typeof text !== 'string' || typeof size !== 'number' || size <= 0) {
